@@ -154,3 +154,8 @@ processor_config.json
 
 # nsys file
 nsysoutput/
+
+.vscode
+ShareGPT4V
+coco/train2017
+qwen2.5vl_sft/*

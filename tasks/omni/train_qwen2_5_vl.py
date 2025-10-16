@@ -68,10 +68,17 @@ def process_sample(
 
     token_num_inputs, image_inputs = {}, {}
     image_grid_thw = None
+    if "image" in sample and "images" not in sample:
+        sample["images"] = sample["image"]
     if "images" in sample:
         images = []
-        for image in sample["images"]:
-            images.append(Image.open(BytesIO(image)).convert("RGB"))
+        # images.append(Image.open(BytesIO(sample["images"])).convert("RGB"))
+        if isinstance(sample["images"], str):
+            images.append(Image.open(sample["images"]).convert("RGB"))
+        elif isinstance(sample["images"], list):
+            images.append(Image.open(sample["images"][0]).convert("RGB"))
+        else:
+            images.append(Image.open(BytesIO(sample["images"])).convert("RGB"))
 
         image_inputs = processor.image_processor(images=images, return_tensors="pt")
         image_grid_thw = image_inputs["image_grid_thw"]
@@ -119,11 +126,17 @@ class MyTrainingArguments(TrainingArguments):
         metadata={"help": "Maximum learning rate for vit parameters."},
     )
 
+@dataclass
+class MyDataArguments(DataArguments):
+    source_name: str = field(
+        default=None,
+        metadata={"help": "Source name of dataset."},
+    )
 
 @dataclass
 class Arguments:
     model: "ModelArguments" = field(default_factory=ModelArguments)
-    data: "DataArguments" = field(default_factory=DataArguments)
+    data: "MyDataArguments" = field(default_factory=MyDataArguments)
     train: "MyTrainingArguments" = field(default_factory=MyTrainingArguments)
 
 
@@ -174,6 +187,7 @@ def main():
         processor=processor,
         chat_template=chat_template,
         position_id_func=position_id_func,
+        source_name=args.data.source_name,
     )
 
     if args.train.rmpad:
@@ -412,13 +426,6 @@ def main():
                     },
                 }
                 Checkpointer.save(args.train.save_checkpoint_path, state, global_steps=global_step)
-                if args.train.global_rank == 0:
-                    helper.save_step2token(
-                        args.train.step2token_path,
-                        consumed_tokens=train_metrics["consume_tokens(B)"],
-                        global_step=global_step,
-                        save_checkpoint_path=save_checkpoint_path,
-                    )
                 dist.barrier()
                 logger.info_rank0(f"Distributed checkpoint saved at {save_checkpoint_path} successfully!")
 
@@ -439,13 +446,6 @@ def main():
                 },
             }
             Checkpointer.save(args.train.save_checkpoint_path, state, global_steps=global_step)
-            if args.train.global_rank == 0:
-                helper.save_step2token(
-                    args.train.step2token_path,
-                    consumed_tokens=train_metrics["consume_tokens(B)"],
-                    global_step=global_step,
-                    save_checkpoint_path=save_checkpoint_path,
-                )
             dist.barrier()
             logger.info_rank0(f"Distributed checkpoint saved at {save_checkpoint_path} successfully!")
 

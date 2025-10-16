@@ -106,7 +106,8 @@ def build_foundation_model(
     init_kwargs = {
         "config": config,
         "torch_dtype": getattr(torch, torch_dtype),
-        "attn_implementation": attn_implementation,
+        # "attn_implementation": attn_implementation,
+        "attn_implementation": "eager",
         "trust_remote_code": True,
     }
 
