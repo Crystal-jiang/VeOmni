@@ -1,7 +1,7 @@
 Welcome to VeOmni
 =========================
 
-.. image:: ../assets/logo.png
+.. image:: ./assets/logo.png
    :width: 50%
    :align: center
 
@@ -38,7 +38,7 @@ Our guiding principles when building VeOmni are:
 - **Omni model native**: VeOmni enables users to effortlessly scale any omni-model across devices and accelerators.
 - **Torch native**: VeOmni is designed to leverage PyTorch's native functions to the fullest extent, ensuring maximum compatibility and performance.
 
-.. image:: ../assets/system.png
+.. image:: ./assets/system.png
    :width: 100%
    :align: center
 
@@ -58,9 +58,9 @@ Our guiding principles when building VeOmni are:
    :maxdepth: 1
    :caption: Usage
 
+   usage/basic_modules.md
    usage/arguments.md
-   usage/best_practice.md
-   usage/enable_new_models.md
+   usage/support_new_models.md
 
 .. toctree::
    :maxdepth: 1
@@ -81,8 +81,8 @@ Our guiding principles when building VeOmni are:
    :caption: Key Features
 
    key_features/ep_fsdp2.md
-   key_features/preprocessor_registry.md
    key_features/ulysses.md
+   key_features/preprocessor_registry.md
 
 
 ---------------------------------------
