@@ -60,7 +60,7 @@ class AsyncAttentionSequenceParallelTest(SequenceParallelTest):
         return torch.sum(output * t)
 
     @pytest.mark.skipif(get_torch_device().device_count() < 4, reason="device_count should be >= 4")
-    @pytest.mark.skipif(is_torch_npu_available, reason="npu skip async ulysses")
+    @pytest.mark.skipif(is_torch_npu_available(), reason="npu skip async ulysses")
     def test_self_attn(self):
         self._get_process_group()
         full_input = self._get_input_data()
@@ -109,7 +109,7 @@ class AsyncAttentionSequenceParallelTest(SequenceParallelTest):
         torch.testing.assert_close(full_input_grad, part_input_grad, atol=1e-5, rtol=1e-5)
 
     @pytest.mark.skipif(get_torch_device().device_count() < 4, reason="device_count should be >= 4")
-    @pytest.mark.skipif(is_torch_npu_available, reason="npu skip async ulysses")
+    @pytest.mark.skipif(is_torch_npu_available(), reason="npu skip async ulysses")
     def test_self_attn_padding(self):
         self._get_process_group()
         full_input = self._get_input_data_for_padding()
