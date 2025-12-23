@@ -1,3 +1,4 @@
+import os
 from dataclasses import dataclass
 from typing import Dict
 
@@ -8,11 +9,11 @@ from transformers import set_seed
 from veomni.models import build_foundation_model
 from veomni.optim import build_optimizer
 from veomni.utils.device import get_device_type
+from veomni.utils.import_utils import is_torch_npu_available
 
 
 def build_base_model_optim(
     config_path: str,
-    force_use_huggingface: bool = True,
     attn_implementation: str = "eager",
     moe_implementation: str = "eager",
 ):
@@ -23,7 +24,6 @@ def build_base_model_optim(
         attn_implementation=attn_implementation,
         moe_implementation=moe_implementation,
         init_device=get_device_type(),
-        force_use_huggingface=force_use_huggingface,
     )
 
     optimizer = build_optimizer(
@@ -41,7 +41,7 @@ def build_base_model_optim(
 
 @dataclass
 class ModelMode:
-    force_use_huggingface: bool
+    modeling_backend: str
     attn_implementation: str
     attn_case: str
     sync_weight_func: any = None
@@ -50,38 +50,66 @@ class ModelMode:
 
 def prepare_models_modes(is_moe: bool = False):
     base_model_modes = [
-        ModelMode(force_use_huggingface=True, attn_implementation="eager", attn_case="padded_bsh"),
-        ModelMode(force_use_huggingface=False, attn_implementation="eager", attn_case="padded_bsh"),
-        ModelMode(force_use_huggingface=True, attn_implementation="flash_attention_2", attn_case="position_ids"),
-        ModelMode(force_use_huggingface=False, attn_implementation="flash_attention_2", attn_case="position_ids"),
+        ModelMode(modeling_backend="hf", attn_implementation="eager", attn_case="padded_bsh"),
+        ModelMode(modeling_backend="veomni", attn_implementation="eager", attn_case="padded_bsh"),
+        ModelMode(modeling_backend="hf", attn_implementation="flash_attention_2", attn_case="position_ids"),
+        ModelMode(modeling_backend="veomni", attn_implementation="flash_attention_2", attn_case="position_ids"),
     ]
+    if not is_torch_npu_available():
+        base_model_modes.extend(
+            [
+                ModelMode(modeling_backend="hf", attn_implementation="flash_attention_3", attn_case="position_ids"),
+                ModelMode(
+                    modeling_backend="veomni",
+                    attn_implementation="flash_attention_3",
+                    attn_case="position_ids",
+                ),
+            ]
+        )
 
     moe_model_modes = [
         ModelMode(
-            force_use_huggingface=True,
+            modeling_backend="hf",
             attn_implementation="eager",
             attn_case="position_ids",
             moe_implementation="fused",
         ),
         ModelMode(
-            force_use_huggingface=True,
+            modeling_backend="veomni",
             attn_implementation="eager",
             attn_case="position_ids",
             moe_implementation="fused",
         ),
         ModelMode(
-            force_use_huggingface=True,
+            modeling_backend="hf",
             attn_implementation="flash_attention_2",
             attn_case="position_ids",
             moe_implementation="fused",
         ),
         ModelMode(
-            force_use_huggingface=False,
+            modeling_backend="veomni",
             attn_implementation="flash_attention_2",
             attn_case="position_ids",
             moe_implementation="fused",
         ),
     ]
+    if not is_torch_npu_available():
+        moe_model_modes.extend(
+            [
+                ModelMode(
+                    modeling_backend="hf",
+                    attn_implementation="flash_attention_3",
+                    attn_case="position_ids",
+                    moe_implementation="fused",
+                ),
+                ModelMode(
+                    modeling_backend="veomni",
+                    attn_implementation="flash_attention_3",
+                    attn_case="position_ids",
+                    moe_implementation="fused",
+                ),
+            ]
+        )
 
     return base_model_modes + moe_model_modes if is_moe else base_model_modes
 
@@ -203,3 +231,19 @@ def compare_multi_items(outputs_dict: Dict, rtol=1e-3, atol=1e-5):
         except AssertionError:
             print_all_values(outputs_dict, "gnorm")
             raise AssertionError("Gnorm not match")
+
+
+def apply_veomni_attention_unpatch():
+    from transformers.integrations.flash_attention import flash_attention_forward
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+
+    ALL_ATTENTION_FUNCTIONS.register("flash_attention_2", flash_attention_forward)
+    ALL_ATTENTION_FUNCTIONS.register("flash_attention_3", flash_attention_forward)
+
+
+def set_environ_param(model_mode: ModelMode):
+    apply_veomni_attention_unpatch()
+    if model_mode.modeling_backend == "veomni":
+        os.environ["MODELING_BACKEND"] = "veomni"
+    else:
+        os.environ["MODELING_BACKEND"] = "hf"

@@ -65,7 +65,7 @@ def get_device_id() -> int:
     return get_torch_device().current_device()
 
 
-def get_nccl_backend() -> str:
+def get_dist_comm_backend() -> str:
     """Return distributed communication backend type based on device type."""
     if IS_CUDA_AVAILABLE:
         return "nccl"
@@ -80,6 +80,31 @@ def synchronize() -> None:
     get_torch_device().synchronize()
 
 
+def stream_synchronize() -> None:
+    """Execute device stream synchronize operation."""
+    if IS_CUDA_AVAILABLE:
+        torch.cuda.current_stream().synchronize()
+    elif IS_NPU_AVAILABLE:
+        torch.npu.current_stream().synchronize()
+    else:
+        synchronize()
+
+
 def empty_cache() -> None:
     """Execute torch empty cache operation."""
     get_torch_device().empty_cache()
+
+
+def set_device(device: torch.types.Device) -> None:
+    """Execute set device operation."""
+    get_torch_device().set_device(device)
+
+
+def is_nccl_backend() -> bool:
+    """Check if the distributed communication backend is NCCL."""
+    return get_dist_comm_backend() == "nccl"
+
+
+def is_hccl_backend() -> bool:
+    """Check if the distributed communication backend is HCCL."""
+    return get_dist_comm_backend() == "hccl"

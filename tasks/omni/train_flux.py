@@ -16,6 +16,7 @@ from transformers import (
 from veomni.checkpoint import build_checkpointer, ckpt_to_state_dict
 from veomni.data.diffusion.data_loader import build_dit_dataloader
 from veomni.data.diffusion.dataset import build_text_image_dataset
+from veomni.distributed.clip_grad_norm import veomni_clip_grad_norm
 from veomni.distributed.offloading import build_activation_offloading_context
 from veomni.distributed.parallel_state import get_parallel_state, init_parallel_state
 from veomni.distributed.torch_parallelize import build_parallelize_model
@@ -35,7 +36,7 @@ from veomni.utils import helper
 from veomni.utils.arguments import DataArguments, ModelArguments, TrainingArguments, parse_args, save_args
 from veomni.utils.device import (
     get_device_type,
-    get_nccl_backend,
+    get_dist_comm_backend,
     get_torch_device,
     synchronize,
 )
@@ -157,7 +158,7 @@ def get_param_groups(model: torch.nn.Module, default_lr: float, vit_lr: float):
 def main():
     args = parse_args(Arguments)
     get_torch_device().set_device(f"{get_device_type()}:{args.train.local_rank}")
-    dist.init_process_group(backend=get_nccl_backend())
+    dist.init_process_group(backend=get_dist_comm_backend())
     helper.set_seed(args.train.seed, args.train.enable_full_determinism)
     if args.train.global_rank == 0:
         save_args(args, args.train.output_dir)
@@ -298,6 +299,7 @@ def main():
     ops_to_save = convert_ops_to_objects(args.train.ops_to_save)
     model = build_parallelize_model(
         model,
+        weights_path=args.model.model_path,
         enable_full_shard=args.train.enable_full_shard,
         enable_mixed_precision=args.train.enable_mixed_precision,
         enable_gradient_checkpointing=args.train.enable_gradient_checkpointing,
@@ -324,6 +326,7 @@ def main():
             wandb.init(
                 project=args.train.wandb_project,
                 name=args.train.wandb_name,
+                settings=wandb.Settings(console="off"),
                 config={**vars(args.model), **vars(args.data), **vars(args.train)},  # flatten dict
             )
 
@@ -472,10 +475,7 @@ def main():
                 total_loss += loss.item()
                 del batch
 
-            if args.train.data_parallel_mode == "fsdp1":
-                grad_norm = model.clip_grad_norm_(args.train.max_grad_norm).item()
-            else:
-                grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.train.max_grad_norm, foreach=True)
+            grad_norm = veomni_clip_grad_norm(model, args.train.max_grad_norm)
 
             optimizer.step()
             lr_scheduler.step()
@@ -491,7 +491,8 @@ def main():
             train_metrics = environ_meter.step(delta_time, global_step=global_step)
 
             data_loader_tqdm.set_postfix_str(
-                f"loss: {total_loss:.4f}, grad_norm: {grad_norm:.2f}, lr: {lr:.2e}, step_time: {delta_time:.2f}s"
+                f"loss: {total_loss:.4f}, grad_norm: {grad_norm:.2f}, lr: {lr:.2e}, step_time: {delta_time:.2f}s",
+                refresh=False,
             )
             data_loader_tqdm.update()
 

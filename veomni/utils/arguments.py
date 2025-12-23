@@ -81,7 +81,15 @@ class ModelArguments:
         default=False,
         metadata={"help": "Whether to encode target with decoder. Only supports stable diffusion as decoder."},
     )
-    attn_implementation: Optional[Literal["eager", "sdpa", "flash_attention_2", "native-sparse"]] = field(
+    attn_implementation: Optional[
+        Literal[
+            "eager",
+            "sdpa",
+            "flash_attention_2",
+            "flash_attention_3",
+            "native-sparse",
+        ]
+    ] = field(
         default="flash_attention_2",
         metadata={"help": "Attention implementation to use."},
     )
@@ -92,10 +100,6 @@ class ModelArguments:
     basic_modules: Optional[List[str]] = field(
         default_factory=list,
         metadata={"help": "Basic modules beyond model._no_split_modules to be sharded in FSDP."},
-    )
-    force_use_huggingface: bool = field(
-        default=False,
-        metadata={"help": "Force loading model from huggingface."},
     )
 
     def __post_init__(self):
@@ -148,13 +152,17 @@ class DataArguments:
         default="conversation",
         metadata={"help": "Type of the training data."},
     )
-    dataloader_type: Literal["native", "streaming"] = field(
-        default="streaming",
+    dataloader_type: str = field(
+        default="native",
         metadata={"help": "Type of the dataloader."},
     )
-    datasets_type: Literal["byted", "mapping", "iterable", "energon"] = field(
-        default="byted",
+    datasets_type: str = field(
+        default="mapping",
         metadata={"help": "Type of the datasets."},
+    )
+    multisource_datasets_type: str = field(
+        default="interleave",
+        metadata={"help": "Type of the datasets for multisource training."},
     )
     enable_multisource: bool = field(
         default=False,
@@ -227,6 +235,19 @@ class DataArguments:
             self.shuffle_shard_nums = 1
             logger.info_rank0("`shuffle_shard_nums` is set to 1 when using multisource dataset.")
 
+        from ..data.data_loader import DATALOADER_REGISTRY
+        from ..data.dataset import DATASET_REGISTRY
+
+        assert self.datasets_type in DATASET_REGISTRY.valid_keys(), f"Unknown datasets type: {self.datasets_type}"
+        assert self.dataloader_type in DATALOADER_REGISTRY.valid_keys(), (
+            f"Unknown dataloader type: {self.dataloader_type}"
+        )
+
+        if self.enable_multisource:
+            self.dataset_name = self.multisource_datasets_type
+        else:
+            self.dataset_name = self.datasets_type
+
         if self.text_keys is None:
             if self.data_type == "plaintext":
                 self.text_keys = "content_split"
@@ -243,6 +264,16 @@ class DataArguments:
 class TrainingArguments:
     output_dir: str = field(
         metadata={"help": "Path to save model checkpoints."},
+    )
+    vit_lr: float = field(
+        default=5e-5,
+        metadata={"help": "Maximum learning rate specifically for the **Vision Transformer (ViT) encoder** weights."},
+    )
+    train_architecture: Literal["full", "lora"] = field(
+        default="full",
+        metadata={
+            "help": "Specifies the parameter update strategy for training the multi-modal model. 'full' for Standard SFT, lora for LoRA."
+        },
     )
     lr: float = field(
         default=5e-5,
@@ -367,12 +398,6 @@ class TrainingArguments:
             "help": "When enabling activation offload, `activation_gpu_limit` GB activations are allowed to reserve on GPU."
         },
     )
-    enable_rank0_init: bool = field(
-        default=False,
-        metadata={
-            "help": "Enable rank0-only initialization for FSDP1 training. Note: this argument will be deprecated in the future, please use `init_device=cpu` instead."
-        },
-    )
     init_device: Literal["cpu", "cuda", "meta", "npu"] = field(
         default="cuda",
         metadata={
@@ -388,12 +413,6 @@ class TrainingArguments:
     enable_full_determinism: bool = field(
         default=False,
         metadata={"help": "Enable full determinism."},
-    )
-    allow_cuda_launch_blocking: bool = field(
-        default=False,
-        metadata={
-            "help": "Set CUDA_LAUNCH_BLOCK=1 would degrade performance significantly. Leave this as False to prevent CUDA_LAUNCH_BLOCKING from being accidentally enabled. DO NOT enable this unless you are debugging something"
-        },
     )
     empty_cache_steps: int = field(
         default=500,
@@ -439,8 +458,8 @@ class TrainingArguments:
         default=1,
         metadata={"help": "Ring-attn context parallel size."},
     )
-    ckpt_manager: Literal["omnistore", "dcp", "bytecheckpoint"] = field(
-        default="omnistore",
+    ckpt_manager: str = field(
+        default="dcp",
         metadata={"help": "Checkpoint manager."},
     )
     save_async: bool = field(
@@ -580,17 +599,6 @@ class TrainingArguments:
             )
 
         # init method check
-        # TODO: remove `enable_rank0_init`
-        logger.warning_rank0(
-            "`enable_rank0_init` will be deprecated in the future, please use `init_device=cpu` instead."
-        )
-        if self.enable_rank0_init:
-            if self.init_device != "cpu":
-                logger.warning_rank0(
-                    "`enable_rank0_init` is set to True, but `init_device` is not set to `cpu`. We change `init_device=cpu`."
-                    "If you try to init model in `cuda` or `meta`, please use `init_device = cuda` or `init_device = meta` instead."
-                )
-            self.init_device = "cpu"
         assert self.expert_parallel_size == 1 or self.init_device != "cpu", (
             "cpu init is not supported when enable ep. Please use `init_device = cuda` or `init_device = meta` instead."
         )
@@ -646,15 +654,9 @@ class TrainingArguments:
         else:
             self.profile_this_rank = False
 
-        # Prevent CUDA_LAUNCH_BLOCKING from being accidentally enabled
-        if not self.allow_cuda_launch_blocking:
-            assert not self.enable_full_determinism, (
-                "allow_cuda_launch_blocking is disabled but enable_full_determinism is enabled. enable_full_determinism would set CUDA_LUANCH_BLOCKING to 1!"
-            )
-            cuda_launch_blocking_val = os.environ.get("CUDA_LAUNCH_BLOCKING", "").strip()
-            assert cuda_launch_blocking_val != "1", (
-                "CUDA_LAUNCH_BLOCKING=1 is set when allow_cuda_launch_blocking is not enabled!"
-            )
+        from ..checkpoint import CHECKPOINTER_REGISTRY
+
+        assert self.ckpt_manager in CHECKPOINTER_REGISTRY.valid_keys(), f"Unknown ckpt_manager: {self.ckpt_manager}"
 
     def compute_train_steps(
         self, max_seq_len: Optional[int] = None, train_size: Optional[int] = None, dataset_length: Optional[int] = None

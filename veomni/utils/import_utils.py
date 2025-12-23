@@ -42,9 +42,7 @@ _PACKAGE_FLAGS: Dict[str, bool] = {
     "flash_attn": _is_package_available("flash_attn"),
     "liger_kernel": _is_package_available("liger_kernel"),
     "torch_npu": _is_package_available("torch_npu"),
-    "vescale": _is_package_available("vescale"),
     "seed_kernels": _is_package_available("seed_kernels"),
-    "bytecheckpoint": _is_package_available("bytecheckpoint"),
     "diffusers": _is_package_available("diffusers"),
     "av": _is_package_available("av"),
     "librosa": _is_package_available("librosa"),
@@ -66,16 +64,8 @@ def is_torch_npu_available() -> bool:
     return _PACKAGE_FLAGS["torch_npu"]
 
 
-def is_vescale_available() -> bool:
-    return _PACKAGE_FLAGS["vescale"]
-
-
 def is_seed_kernels_available() -> bool:
     return _PACKAGE_FLAGS["seed_kernels"]
-
-
-def is_bytecheckpoint_available() -> bool:
-    return _PACKAGE_FLAGS["bytecheckpoint"]
 
 
 def is_diffusers_available() -> bool:
@@ -99,7 +89,7 @@ def is_torch_version_greater_than(value: str) -> bool:
 
 @lru_cache
 def is_transformers_version_greater_or_equal_to(value: str) -> bool:
-    return _get_package_version("transformers") > version.parse(value)
+    return _get_package_version("transformers") >= version.parse(value)
 
 
 def is_veomni_patch_available() -> bool:
