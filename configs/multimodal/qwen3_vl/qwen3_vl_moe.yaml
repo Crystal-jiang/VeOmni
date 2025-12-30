@@ -4,10 +4,10 @@ model:
   attn_implementation: flash_attention_2
 
 data:
-  train_path: sharegpt4v_pretrain
+  train_path: fake_8k_data.json
   data_type: conversation
   chat_template: qwen2_5vl
-  max_seq_len: 4096
+  max_seq_len: 8192
   train_size: 80000000
 
 train:
@@ -29,8 +29,8 @@ train:
   max_steps: 500
   init_device: meta
   enable_profiling: true
-  profile_start_step: 20
-  profile_end_step: 21
+  profile_start_step: 15
+  profile_end_step: 16
   profile_record_shapes: true
   ckpt_manager: dcp
   save_hf_weights: false
