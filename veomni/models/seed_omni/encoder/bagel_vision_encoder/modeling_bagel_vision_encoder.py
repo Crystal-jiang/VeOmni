@@ -1,9 +1,13 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from flash_attn import flash_attn_varlen_func
 from transformers.activations import ACT2FN
 from transformers.models.siglip.modeling_siglip import SiglipAttention, SiglipPreTrainedModel
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
 
 from ..base import BaseEncoderModelMixin
 from .configuration_bagel_vision_encoder import BagelVisionEncoderConfig
@@ -26,10 +30,10 @@ class RotaryEmbedding2D(torch.nn.Module):
         cos_h, sin_h = self._forward_one_side(grid_h, inv_freq)
         cos_w, sin_w = self._forward_one_side(grid_w, inv_freq)
 
-        self.register_buffer("cos_h", cos_h)
-        self.register_buffer("sin_h", sin_h)
-        self.register_buffer("cos_w", cos_w)
-        self.register_buffer("sin_w", sin_w)
+        self.register_buffer("cos_h", cos_h, persistent=False)
+        self.register_buffer("sin_h", sin_h, persistent=False)
+        self.register_buffer("cos_w", cos_w, persistent=False)
+        self.register_buffer("sin_w", sin_w, persistent=False)
 
     def _forward_one_side(self, grid, inv_freq):
         freqs = grid[..., None] * inv_freq[None, None, :]
@@ -104,6 +108,29 @@ class SiglipVisionEmbeddings(nn.Module):
         return embeddings
 
 
+def _sdpa_varlen_attention(
+    query_states: torch.Tensor,
+    key_states: torch.Tensor,
+    value_states: torch.Tensor,
+    cu_seqlens: torch.IntTensor,
+) -> torch.Tensor:
+    """SDPA-based varlen attention fallback for environments without flash_attn.
+
+    Splits the packed sequence by cu_seqlens, runs per-segment SDPA, and concatenates.
+    query/key/value shapes: (total_len, num_heads, head_dim).
+    """
+    cu_seqlens_cpu = cu_seqlens.cpu().tolist()
+    outputs = []
+    for i in range(len(cu_seqlens_cpu) - 1):
+        start, end = cu_seqlens_cpu[i], cu_seqlens_cpu[i + 1]
+        q = query_states[start:end].unsqueeze(0).transpose(1, 2)
+        k = key_states[start:end].unsqueeze(0).transpose(1, 2)
+        v = value_states[start:end].unsqueeze(0).transpose(1, 2)
+        out = torch.nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
+        outputs.append(out.squeeze(0).transpose(0, 1))
+    return torch.cat(outputs, dim=0)
+
+
 class SiglipFlashAttention2(SiglipAttention):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -137,16 +164,24 @@ class SiglipFlashAttention2(SiglipAttention):
             query_states = torch.cat([qh, qw], dim=-1)
             key_states = torch.cat([kh, kw], dim=-1)
 
-        attn_output = flash_attn_varlen_func(
-            query_states.to(torch.bfloat16),
-            key_states.to(torch.bfloat16),
-            value_states.to(torch.bfloat16),
-            cu_seqlens_q=cu_seqlens,
-            cu_seqlens_k=cu_seqlens,
-            max_seqlen_q=max_seqlen,
-            max_seqlen_k=max_seqlen,
-            causal=False,
-        )
+        if flash_attn_varlen_func is not None:
+            attn_output = flash_attn_varlen_func(
+                query_states.to(torch.bfloat16),
+                key_states.to(torch.bfloat16),
+                value_states.to(torch.bfloat16),
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_k=cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_k=max_seqlen,
+                causal=False,
+            )
+        else:
+            attn_output = _sdpa_varlen_attention(
+                query_states.to(torch.bfloat16),
+                key_states.to(torch.bfloat16),
+                value_states.to(torch.bfloat16),
+                cu_seqlens,
+            )
 
         attn_output = self.out_proj(attn_output.reshape(total_q_len, -1))
         return attn_output
@@ -261,11 +296,12 @@ class SiglipVisionTransformer(nn.Module):
 
         extra_inputs = {}
         if self.config.rope:
+            device = packed_flattened_position_ids.device
             extra_inputs.update(
-                cos_h=self.rope.cos_h[packed_flattened_position_ids],
-                sin_h=self.rope.sin_h[packed_flattened_position_ids],
-                cos_w=self.rope.cos_w[packed_flattened_position_ids],
-                sin_w=self.rope.sin_w[packed_flattened_position_ids],
+                cos_h=self.rope.cos_h.to(device)[packed_flattened_position_ids],
+                sin_h=self.rope.sin_h.to(device)[packed_flattened_position_ids],
+                cos_w=self.rope.cos_w.to(device)[packed_flattened_position_ids],
+                sin_w=self.rope.sin_w.to(device)[packed_flattened_position_ids],
             )
 
         last_hidden_state = self.encoder(
@@ -342,7 +378,7 @@ class PositionEmbedding(nn.Module):
         )
 
     def forward(self, position_ids):
-        return self.pos_embed[position_ids]
+        return self.pos_embed.to(position_ids.device)[position_ids]
 
 
 class MLPconnector(nn.Module):
