@@ -385,7 +385,7 @@ class PositionEmbedding(nn.Module):
         )
 
     def forward(self, position_ids):
-        return self.pos_embed[position_ids]
+        return self.pos_embed.to(position_ids.device)[position_ids]
 
 
 # --------------------------------------------------------

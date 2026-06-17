@@ -100,7 +100,9 @@ def main():
             encoder_state_dict[k.replace("vit_model.", "")] = model_state_dict.pop(k)
         elif k.startswith("connector."):
             encoder_state_dict[k] = model_state_dict.pop(k)
-    vision_encoder.load_state_dict(encoder_state_dict, strict=True, assign=True)
+    if args.vit_rope:
+        encoder_state_dict.pop("embeddings.position_embedding.weight", None)
+    vision_encoder.load_state_dict(encoder_state_dict, strict=False, assign=True)
     encoder_dir = os.path.join(args.output_dir, "bagel_vision_encoder")
     vision_encoder.save_pretrained(encoder_dir)
     BagelVisionEncoderProcessor().save_pretrained(encoder_dir)

@@ -60,6 +60,10 @@ class MyDataArguments(DataArguments):
         default=0.0,
         metadata={"help": "Ratio for instruction tuning data change to generation data."},
     )
+    shuffle: bool = field(
+        default=True,
+        metadata={"help": "Whether to shuffle the dataset."},
+    )
 
 
 @dataclass
@@ -146,7 +150,6 @@ def main():
         input_encoder=args.model.input_encoder,
         output_encoder=args.model.output_encoder,
         encode_target=args.model.encode_target,
-        max_pixels=args.data.max_pixels,
     )
     chat_template = build_multimodal_chat_template(args.data.chat_template, processor.tokenizer)
     position_id_func = model.get_position_id_func()
@@ -158,6 +161,7 @@ def main():
     is_bagel = getattr(model.config.foundation_config, "model_type", "") == "bagel_foundation"
     bagel_collate_fn = None
     if is_bagel:
+        import veomni.data.multimodal.bagel_dataset  # noqa: F401  register bagel_unified dataset
         from veomni.data.multimodal.bagel_collator import BagelPackedCollator
         from veomni.data.multimodal.bagel_transform import BagelSampleTransform, add_special_tokens
 
@@ -298,7 +302,7 @@ def main():
     )
     lr_scheduler = build_lr_scheduler(
         optimizer,
-        train_steps=args.train.train_steps * args.train.num_train_epochs,
+        train_steps=args.train_steps * args.train.num_train_epochs,
         lr=args.train.optimizer.lr,
         lr_min=args.train.optimizer.lr_min,
         lr_decay_style=args.train.optimizer.lr_decay_style,
@@ -348,8 +352,8 @@ def main():
         state = {"model": model, "optimizer": optimizer, "extra_state": {}}  # cannot be None
         Checkpointer.load(args.train.checkpoint.load_path, state)
         global_step = state["extra_state"]["global_step"]
-        start_epoch = global_step // args.train.train_steps
-        start_step = global_step % args.train.train_steps
+        start_epoch = global_step // args.train_steps
+        start_step = global_step % args.train_steps
         lr_scheduler_state = state["extra_state"]["lr_scheduler"]
         lr_scheduler.load_state_dict(lr_scheduler_state)
         train_dataloader.load_state_dict(state["extra_state"]["train_dataloader"])
@@ -370,21 +374,21 @@ def main():
     )
     model.train()
     logger.info(
-        f"rank{args.train.local_rank} Start training, train_steps: {args.train.train_steps}, epochs: {args.train.num_train_epochs}"
+        f"rank{args.train.local_rank} Start training, train_steps: {args.train_steps}, epochs: {args.train.num_train_epochs}"
     )
     for epoch in range(start_epoch, args.train.num_train_epochs):
         if hasattr(train_dataloader, "set_epoch"):
             train_dataloader.set_epoch(epoch)
 
         data_loader_tqdm = trange(
-            args.train.train_steps,
+            args.train_steps,
             desc=f"Epoch {epoch + 1}/{args.train.num_train_epochs}",
-            total=args.train.train_steps,
+            total=args.train_steps,
             initial=start_step,
             disable=args.train.local_rank != 0,
         )
         data_iterator = iter(train_dataloader)
-        for _ in range(start_step, args.train.train_steps):
+        for _ in range(start_step, args.train_steps):
             global_step += 1
 
             try:

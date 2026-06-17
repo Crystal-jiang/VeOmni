@@ -59,7 +59,13 @@ class SeedOmniProcessor(ProcessorMixin):
     ]
 
     def __init__(self, tokenizer=None, chat_template=None, **kwargs):
+        for key in list(kwargs.keys()):
+            if key in self.optional_attributes:
+                setattr(self, key, kwargs.pop(key))
         super().__init__(tokenizer=tokenizer, chat_template=chat_template, **kwargs)
+        for attr in self.optional_attributes:
+            if not hasattr(self, attr):
+                setattr(self, attr, None)
 
     def __call__(
         self,
@@ -120,7 +126,13 @@ class SeedOmniProcessor(ProcessorMixin):
                 save_path = os.path.join(save_directory, f"{prefix}_processor")
                 processor.save_pretrained(save_path)
 
-        return super().save_pretrained(save_directory, **kwargs)
+        if self.tokenizer is not None:
+            self.tokenizer.save_pretrained(save_directory)
+        if self.chat_template is not None:
+            import json
+
+            with open(os.path.join(save_directory, "chat_template.jinja"), "w") as f:
+                f.write(self.chat_template)
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path: str, **kwargs):

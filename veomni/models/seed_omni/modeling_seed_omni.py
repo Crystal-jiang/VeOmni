@@ -450,6 +450,8 @@ class SeedOmniModel(SeedOmniPreTrainedModel, GenerationMixin):
         self.foundation.set_output_embeddings(new_embeddings)
 
     def get_parallel_plan(self):
+        if not hasattr(self.foundation, "get_parallel_plan"):
+            return None
         parallel_plan: ParallelPlan = self.foundation.get_parallel_plan()
         parallel_plan.update_prefix("foundation")
         return parallel_plan

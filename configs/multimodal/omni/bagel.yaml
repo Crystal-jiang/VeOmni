@@ -20,27 +20,43 @@ model:
     image:
       config_path: bagel_veomni/bagel_vision_decoder
       model_path: bagel_veomni/bagel_vision_decoder
+  ops_implementation:
+    rms_norm_implementation: eager
+    rotary_pos_emb_implementation: eager
+    swiglu_mlp_implementation: eager
+    cross_entropy_loss_implementation: eager
+    moe_implementation: eager
+    load_balancing_loss_implementation: eager
 
 data:
   dataloader:
     type: native
-  datasets_type: iterable
-  train_path: bagel_unified
+  datasets_type: bagel_unified
+  train_path: data/bagel_example
   data_type: conversation
   chat_template: qwen2vl
-  max_seq_len: 8192
+  max_seq_len: 512
 
 train:
+  dyn_bsz: false
   accelerator:
     fsdp_config:
       fsdp_mode: fsdp2
+      offload: true
   optimizer:
     lr: 1.0e-5
     lr_decay_style: cosine
-  num_train_epochs: 3
-  micro_batch_size: 2
-  global_batch_size: 64
+  num_train_epochs: 1
+  micro_batch_size: 1
+  global_batch_size: 8
+  max_steps: 50
   freeze_decoder: true        # keep the frozen VAE frozen; train the flow projections
+  freeze_foundation: true
+  freeze_encoder: true
+  empty_cache_steps: 1
+  gradient_checkpointing:
+    enable: true
   checkpoint:
     output_dir: bagel_sft
     manager: dcp
+    save_steps: 50

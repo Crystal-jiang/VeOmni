@@ -2,7 +2,7 @@ from typing import List, Optional, Union
 
 from transformers.image_utils import PILImageResampling
 
-from ..qwen2_vl_vision_model import Qwen2VLVisionModelProcessor
+from ..qwen2_vl_vision_model.processing_qwen2_vl_vision_model import Qwen2VLVisionModelProcessor
 
 
 # TODO: bagel vision model processor
