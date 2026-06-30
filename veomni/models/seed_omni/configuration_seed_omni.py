@@ -97,7 +97,7 @@ class SeedOmniConfig(PretrainedConfig):
         self.decoder_config = SeedOmniDecoderConfig(**decoder_config)
         self.foundation_config = _init_config(foundation_config)
         self.initializer_range = initializer_range
-        super().__init__(architectures=kwargs.pop("architectures", "SeedOmniForCausalLM"), **kwargs)
+        super().__init__(architectures=kwargs.pop("architectures", ["SeedOmniForCausalLM"]), **kwargs)
 
     def get_text_config(self, decoder=False) -> PretrainedConfig:
         return self.foundation_config

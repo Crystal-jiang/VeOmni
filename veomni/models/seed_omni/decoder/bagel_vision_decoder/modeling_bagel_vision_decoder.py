@@ -441,7 +441,7 @@ class BagelVisionDecoder(BaseDecoderModelMixin):
     # The decoder is a VAE + flow head with no self-attention; accept whatever
     # attention implementation SeedOmniDecoderModel forwards to satisfy transformers v5.
     _supports_sdpa = True
-    _supports_flash_attn_2 = True
+    _supports_flash_attn = True
     _supports_flex_attn = True
 
     def __init__(self, config: BagelVisionDecoderConfig, **kwargs):

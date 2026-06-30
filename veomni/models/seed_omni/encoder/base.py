@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from abc import ABC, abstractmethod
-from typing import Dict, Tuple
+from typing import Dict, List, Optional, Tuple, TypedDict
 
 import torch
 from transformers import BatchFeature, PretrainedConfig, PreTrainedModel, ProcessorMixin
@@ -26,8 +26,13 @@ class BaseEncoderConfigMixin(PretrainedConfig, ABC):
         self.initializer_range = initializer_range
 
 
+class _BaseEncoderProcessorKwargs(TypedDict, total=False):
+    token_size: Optional[List]
+    token_num: Optional[int]
+
+
 class BaseEncoderProcessorMixin(ProcessorMixin, ABC):
-    valid_kwargs = ["token_size", "token_num"]
+    valid_kwargs = _BaseEncoderProcessorKwargs
     attributes = []
     optional_attributes = ["chat_template", "audio_tokenizer"]
 

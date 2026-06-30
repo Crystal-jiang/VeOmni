@@ -1,4 +1,3 @@
-import inspect
 from typing import List, Optional
 
 import numpy as np
@@ -14,9 +13,6 @@ from ..base import BaseEncoderProcessorMixin
 
 
 class Qwen25OmniAudioModelProcessor(BaseEncoderProcessorMixin, WhisperFeatureExtractor):
-    valid_kwargs = BaseEncoderProcessorMixin.valid_kwargs + list(
-        inspect.signature(WhisperFeatureExtractor.__init__).parameters.keys()
-    )
 
     def __init__(
         self,

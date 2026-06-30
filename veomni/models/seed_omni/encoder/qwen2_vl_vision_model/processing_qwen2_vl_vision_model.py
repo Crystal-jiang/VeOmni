@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import inspect
 from typing import List, Optional, Union
 
 import torch
@@ -24,10 +23,13 @@ from transformers.video_utils import VideoInput
 from ..base import BaseEncoderProcessorMixin
 
 
+class _Qwen2VLVisionModelProcessorKwargs(Qwen2VLImageProcessor.valid_kwargs, total=False):
+    token_size: Optional[List]
+    token_num: Optional[int]
+
+
 class Qwen2VLVisionModelProcessor(BaseEncoderProcessorMixin, Qwen2VLImageProcessor):
-    valid_kwargs = BaseEncoderProcessorMixin.valid_kwargs + list(
-        inspect.signature(Qwen2VLImageProcessor.__init__).parameters.keys()
-    )
+    valid_kwargs = _Qwen2VLVisionModelProcessorKwargs
 
     def __init__(
         self,

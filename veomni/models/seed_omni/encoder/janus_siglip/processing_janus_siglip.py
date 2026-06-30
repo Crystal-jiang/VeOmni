@@ -1,4 +1,3 @@
-import inspect
 from typing import List, Optional
 
 from transformers import BatchFeature
@@ -8,10 +7,13 @@ from ....transformers.janus.image_processing_janus import JanusImageProcessor
 from ..base import BaseEncoderProcessorMixin
 
 
+class _JanusSiglipEncoderProcessorKwargs(JanusImageProcessor.valid_kwargs, total=False):
+    token_size: Optional[List]
+    token_num: Optional[int]
+
+
 class JanusSiglipEncoderProcessor(BaseEncoderProcessorMixin, JanusImageProcessor):
-    valid_kwargs = BaseEncoderProcessorMixin.valid_kwargs + list(
-        inspect.signature(JanusImageProcessor.__init__).parameters.keys()
-    )
+    valid_kwargs = _JanusSiglipEncoderProcessorKwargs
 
     def __init__(
         self,
