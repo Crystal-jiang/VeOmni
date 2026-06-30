@@ -1,6 +1,8 @@
 import math
+import os
 from typing import Optional
 
+import json
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -59,6 +61,15 @@ class BagelVisionDecoderProcessor(BaseImageProcessor):
         self.patch_size = 14
         self.merge_size = 2
         self.image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
+
+    def save_pretrained(self, save_directory, **kwargs):
+        result = super().save_pretrained(save_directory, **kwargs)
+        processor_config = self.to_dict()
+        processor_config["processor_class"] = self.__class__.__name__
+        processor_config_path = os.path.join(save_directory, "processor_config.json")
+        with open(processor_config_path, "w", encoding="utf-8") as f:
+            json.dump(processor_config, f, indent=2, sort_keys=True)
+        return result + [processor_config_path]
 
     def to_dict(self):
         encoder_dict = super().to_dict()
