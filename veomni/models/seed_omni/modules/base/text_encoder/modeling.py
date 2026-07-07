@@ -117,34 +117,46 @@ class TextEncoder(TextEncoderModuleMixin, TextEncoderMetricMeterMixin, PreTraine
         shift_labels: Optional[torch.LongTensor] = None,
         **kwargs,
     ) -> dict:
-        logits = self._project(hidden_states)
+        from ......ops.kernels.cross_entropy import chunk_loss_function
+
         loss: torch.Tensor | None = None
+        logits: torch.Tensor | None = None
 
         if shift_labels is not None:
-            ce_sum = F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                shift_labels.view(-1),
+            weight = self._get_lm_head_weight()
+            loss, _ = chunk_loss_function(
+                hidden_states=hidden_states,
+                weights=weight,
+                labels=shift_labels,
+                chunk_size=1024,
                 ignore_index=-100,
-                reduction="sum",
             )
-            n_valid = (shift_labels.view(-1) != -100).sum().clamp(min=1)
-            loss = ce_sum / n_valid
         elif labels is not None:
-            shift_logits = logits[..., :-1, :].contiguous()
-            shift_targets = labels[..., 1:].contiguous()
-            ce_sum = F.cross_entropy(
-                shift_logits.view(-1, shift_logits.size(-1)),
-                shift_targets.view(-1),
+            shift_labels = labels[..., 1:].contiguous()
+            hidden_states = hidden_states[..., :-1, :].contiguous()
+            weight = self._get_lm_head_weight()
+            loss, _ = chunk_loss_function(
+                hidden_states=hidden_states,
+                weights=weight,
+                labels=shift_labels,
+                chunk_size=1024,
                 ignore_index=-100,
-                reduction="sum",
             )
-            n_valid = (shift_targets != -100).sum().clamp(min=1)
-            loss = ce_sum / n_valid
 
         return {
             "loss": loss,
             "logits": logits,
         }
+
+    def _get_lm_head_weight(self) -> torch.Tensor:
+        if not self.config.tie_word_embeddings:
+            return self.lm_head.weight
+
+        weight = self.embed_tokens.weight
+        if isinstance(weight, DTensor):
+            weight = weight.full_tensor() if torch.is_grad_enabled() else weight.detach().full_tensor()
+        weight = weight.to(dtype=self.dtype)
+        return weight
 
     def _project(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if not self.config.tie_word_embeddings:
