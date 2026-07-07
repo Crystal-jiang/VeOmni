@@ -5,15 +5,34 @@ from typing import Any, Dict, Optional
 
 import torch
 import torch.nn as nn
-from flash_attn import flash_attn_varlen_func
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch.nn.functional import scaled_dot_product_attention
+
+from veomni.utils.device import IS_CUDA_AVAILABLE
+
+
+if IS_CUDA_AVAILABLE:
+    from flash_attn import flash_attn_varlen_func
 from transformers import PreTrainedModel
 from transformers.models.qwen2.modeling_qwen2 import Qwen2MLP, Qwen2RMSNorm
 from transformers.utils import ModelOutput
 
 from .configuration import BagelQwen2MoTConfig
 from .modulemixin import BagelQwen2MoTModuleMixin
+
+
+def _sdpa_varlen_attn(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal=False):
+    num_seqs = cu_seqlens_q.shape[0] - 1
+    outputs = []
+    for i in range(num_seqs):
+        q_start, q_end = cu_seqlens_q[i].item(), cu_seqlens_q[i + 1].item()
+        k_start, k_end = cu_seqlens_k[i].item(), cu_seqlens_k[i + 1].item()
+        qi = q[q_start:q_end].transpose(0, 1).unsqueeze(0)
+        ki = k[k_start:k_end].transpose(0, 1).unsqueeze(0)
+        vi = v[k_start:k_end].transpose(0, 1).unsqueeze(0)
+        oi = scaled_dot_product_attention(qi, ki, vi, is_causal=causal)
+        outputs.append(oi.squeeze(0).transpose(0, 1))
+    return torch.cat(outputs, dim=0)
 
 
 class BagelQwen2MoT(BagelQwen2MoTModuleMixin, PreTrainedModel):
@@ -446,16 +465,30 @@ class BagelQwen2MoTAttention(nn.Module):
 
         cu_seqlens_q = torch.nn.functional.pad(torch.cumsum(query_lens, dim=0), (1, 0))
         cu_seqlens_k = torch.nn.functional.pad(torch.cumsum(key_values_lens, dim=0), (1, 0))
-        packed_attn_output = flash_attn_varlen_func(
-            q=packed_query_states,
-            k=merged_key_states,
-            v=merged_value_states,
-            cu_seqlens_q=cu_seqlens_q.to(torch.int32),
-            cu_seqlens_k=cu_seqlens_k.to(torch.int32),
-            max_seqlen_q=int(query_lens.max().item()),
-            max_seqlen_k=int(key_values_lens.max().item()),
-            causal=is_causal,
-        )
+        max_seqlen_q = int(query_lens.max().item())
+        max_seqlen_k = int(key_values_lens.max().item())
+        if IS_CUDA_AVAILABLE:
+            packed_attn_output = flash_attn_varlen_func(
+                q=packed_query_states,
+                k=merged_key_states,
+                v=merged_value_states,
+                cu_seqlens_q=cu_seqlens_q.to(torch.int32),
+                cu_seqlens_k=cu_seqlens_k.to(torch.int32),
+                max_seqlen_q=max_seqlen_q,
+                max_seqlen_k=max_seqlen_k,
+                causal=is_causal,
+            )
+        else:
+            packed_attn_output = _sdpa_varlen_attn(
+                packed_query_states,
+                merged_key_states,
+                merged_value_states,
+                cu_seqlens_q.to(torch.int32),
+                cu_seqlens_k.to(torch.int32),
+                max_seqlen_q,
+                max_seqlen_k,
+                causal=is_causal,
+            )
         packed_attn_output = packed_attn_output.reshape(-1, self.hidden_size)
         if not is_gen:
             packed_attn_output = self.o_proj(packed_attn_output)

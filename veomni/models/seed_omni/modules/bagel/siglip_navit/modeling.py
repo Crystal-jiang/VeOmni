@@ -14,13 +14,33 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn as nn
-from flash_attn import flash_attn_varlen_func
+from torch.nn.functional import scaled_dot_product_attention
 from transformers import PreTrainedModel
+
+from veomni.utils.device import IS_CUDA_AVAILABLE
+
+
+if IS_CUDA_AVAILABLE:
+    from flash_attn import flash_attn_varlen_func
 from transformers.activations import ACT2FN
 
 from .configuration import BagelSiglipNavitConfig
 from .modulemixin import BagelSiglipNavitMetricMeterMixin, BagelSiglipNavitModuleMixin
 from .processing import BagelSiglipNavitProcessor
+
+
+def _sdpa_varlen_attn(q, k, v, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, causal=False):
+    num_seqs = cu_seqlens_q.shape[0] - 1
+    outputs = []
+    for i in range(num_seqs):
+        q_start, q_end = cu_seqlens_q[i].item(), cu_seqlens_q[i + 1].item()
+        k_start, k_end = cu_seqlens_k[i].item(), cu_seqlens_k[i + 1].item()
+        qi = q[q_start:q_end].transpose(0, 1).unsqueeze(0)
+        ki = k[k_start:k_end].transpose(0, 1).unsqueeze(0)
+        vi = v[k_start:k_end].transpose(0, 1).unsqueeze(0)
+        oi = scaled_dot_product_attention(qi, ki, vi, is_causal=causal)
+        outputs.append(oi.squeeze(0).transpose(0, 1))
+    return torch.cat(outputs, dim=0)
 
 
 class BagelSiglipNavit(BagelSiglipNavitModuleMixin, BagelSiglipNavitMetricMeterMixin, PreTrainedModel):
@@ -170,7 +190,14 @@ class PositionEmbedding(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
-        self.pos_embed.data.copy_(_get_2d_sincos_pos_embed(self.hidden_size, self.max_num_patch_per_side))
+        new_data = _get_2d_sincos_pos_embed(self.hidden_size, self.max_num_patch_per_side)
+        if hasattr(self.pos_embed.data, 'to_local'):
+            self.pos_embed.data.to_local().copy_(new_data)
+        else:
+            self.pos_embed.data.copy_(new_data)
+
+    def _init_weights(self) -> None:
+        self.reset_parameters()
 
     def forward(self, position_ids: torch.LongTensor) -> torch.Tensor:
         return self.pos_embed[position_ids.to(device=self.pos_embed.device)]
@@ -267,18 +294,28 @@ class BagelSiglipAttention(nn.Module):
             query_states = torch.cat([qh, qw], dim=-1)
             key_states = torch.cat([kh, kw], dim=-1)
 
-        if not query_states.is_cuda:
-            raise RuntimeError("BagelSiglipNavit attention requires CUDA flash-attn.")
-        attn_output = flash_attn_varlen_func(
-            query_states.to(torch.bfloat16),
-            key_states.to(torch.bfloat16),
-            value_states.to(torch.bfloat16),
-            cu_seqlens_q=cu_seqlens,
-            cu_seqlens_k=cu_seqlens,
-            max_seqlen_q=max_seqlen,
-            max_seqlen_k=max_seqlen,
-            causal=False,
-        )
+        if IS_CUDA_AVAILABLE:
+            attn_output = flash_attn_varlen_func(
+                query_states.to(torch.bfloat16),
+                key_states.to(torch.bfloat16),
+                value_states.to(torch.bfloat16),
+                cu_seqlens_q=cu_seqlens,
+                cu_seqlens_k=cu_seqlens,
+                max_seqlen_q=max_seqlen,
+                max_seqlen_k=max_seqlen,
+                causal=False,
+            )
+        else:
+            attn_output = _sdpa_varlen_attn(
+                query_states.to(torch.bfloat16),
+                key_states.to(torch.bfloat16),
+                value_states.to(torch.bfloat16),
+                cu_seqlens,
+                cu_seqlens,
+                max_seqlen,
+                max_seqlen,
+                causal=False,
+            )
         return self.out_proj(attn_output.reshape(total_q_len, -1).to(hidden_states.dtype))
 
 
