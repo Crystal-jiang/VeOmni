@@ -124,10 +124,12 @@ class TextEncoder(TextEncoderModuleMixin, TextEncoderMetricMeterMixin, PreTraine
 
         if shift_labels is not None:
             weight = self._get_lm_head_weight()
+            hs_3d = hidden_states.unsqueeze(0)
+            labels_2d = shift_labels.unsqueeze(0)
             loss, _ = chunk_loss_function(
-                hidden_states=hidden_states,
+                hidden_states=hs_3d,
                 weights=weight,
-                labels=shift_labels,
+                labels=labels_2d,
                 chunk_size=1024,
                 ignore_index=-100,
             )
@@ -135,10 +137,12 @@ class TextEncoder(TextEncoderModuleMixin, TextEncoderMetricMeterMixin, PreTraine
             shift_labels = labels[..., 1:].contiguous()
             hidden_states = hidden_states[..., :-1, :].contiguous()
             weight = self._get_lm_head_weight()
+            hs_3d = hidden_states.unsqueeze(0)
+            labels_2d = shift_labels.unsqueeze(0)
             loss, _ = chunk_loss_function(
-                hidden_states=hidden_states,
+                hidden_states=hs_3d,
                 weights=weight,
-                labels=shift_labels,
+                labels=labels_2d,
                 chunk_size=1024,
                 ignore_index=-100,
             )
