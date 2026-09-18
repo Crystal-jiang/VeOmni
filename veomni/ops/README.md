@@ -111,6 +111,7 @@ the HF modeling symbols it uses:
 | `qwen3_vl` | `Qwen3VLTextRMSNorm` | `apply_rotary_pos_emb` | *(n/a)* | `liger_kernel` disabled for RMSNorm/RoPE; vision RoPE via `custom_patches` |
 | `deepseek_v3` | `DeepseekV3RMSNorm` | `apply_rotary_pos_emb` | `DeepseekV3MLP` | `triton` adds batch-invariant RMSNorm + deterministic RoPE (patches `DeepseekV3RotaryEmbedding.forward` via `target_override`) |
 | `deepseek_v4` | `DeepseekV4RMSNorm` + `DeepseekV4UnweightedRMSNorm` | *(eager only)* | `DeepseekV4MLP` shared experts | Patchgen OpSlots; routed experts remain on clamp-aware fused MoE |
+| `qwen4_exp` | `Qwen4ExpTextRMSNorm` | `apply_rotary_pos_emb` + `apply_rotary_pos_emb_vision` | *(n/a)* | NPU patchgen OpSlots; grouped RMSNorm remains eager |
 | `wan` (DiT) | `RMSNorm` | `rope_apply` | *(n/a)* | `triton` RMSNorm/rotary via `extra_backends`; attention block wired via `custom_patches` |
 
 ### Full YAML example

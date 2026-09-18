@@ -43,6 +43,12 @@
 #      Support VeOmni VLM SFT masks and PLE ids, with an explicit SP guard
 #    - method_override: Qwen4ExpForConditionalGeneration.forward
 #      Use VeOmni fused loss for Qwen4-Exp VLM SFT without MTP loss
+#    - method_override: Qwen4ExpTextRMSNorm.forward
+#      Use NPU fused zero-centered RMSNorm when the layout is compatible
+#    - function_replacement: apply_rotary_pos_emb
+#      Use NPU fused partial rotary position embedding
+#    - function_replacement: apply_rotary_pos_emb_vision
+#      Use NPU fused rotary position embedding in the vision tower
 #
 # ==============================================================================
 
@@ -126,6 +132,12 @@ veomni_load_balancing_loss = OpSlot("load_balancing_loss", "standard")
 veomni_causal_conv1d = OpSlot("causal_conv1d", "standard")
 veomni_chunk_gated_delta_rule = OpSlot("chunk_gated_delta_rule", "standard")
 veomni_qsa_indexer = OpSlot("qsa_indexer", "standard")
+
+# NPU-only OpSlots. Qwen4-Exp shares Qwen3.5's zero-centered
+# ``(1 + weight)`` RMSNorm contract.
+veomni_rms_norm = OpSlot("rms_norm", "qwen3_5")
+veomni_apply_rotary_pos_emb = OpSlot("rotary_pos_emb", "partial")
+veomni_apply_rotary_pos_emb_vision = OpSlot("rotary_pos_emb_vision", "full")
 
 
 # ======================================================================
@@ -296,6 +308,12 @@ class Qwen4ExpTextRotaryEmbedding(nn.Module):
         return freqs_t
 
 
+# ======================================================================
+# [MODIFIED CLASS] Qwen4ExpTextRMSNorm
+# Methods patched: forward
+# ======================================================================
+
+
 class Qwen4ExpTextRMSNorm(nn.Module):
     def __init__(self, dim: int, group_size: int | None = None, eps: float = 1e-6):
         super().__init__()
@@ -311,10 +329,15 @@ class Qwen4ExpTextRMSNorm(nn.Module):
         out = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
         return out.flatten(-2) if self.group_size is not None else out
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # Grouped RMSNorm normalizes each group independently. The NPU fused op
+        # normalizes the complete last dimension, so only the ungrouped layout is
+        # safe to replace.
+        if veomni_rms_norm.use_non_eager_impl and self.group_size is None:
+            return veomni_rms_norm(x, self.weight, self.eps)
+
         output = self._norm(x.float())
         # Llama does x.to(float16) * w whilst Qwen4ExpText is (x * w).to(float16)
-        # See https://github.com/huggingface/transformers/pull/29402
         output = output * (1.0 + self.weight.float())
         return output.type_as(x)
 
@@ -701,42 +724,31 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)
 
 
+# ======================================================================
+# [PATCHED FUNCTION] apply_rotary_pos_emb
+# Reason: Use NPU fused partial rotary position embedding
+# Source: veomni.models.transformers.qwen4_exp.qwen4_exp_npu_patch_gen_config
+# ======================================================================
 def apply_rotary_pos_emb(q, k=None, cos=None, sin=None, unsqueeze_dim=1):
-    """Applies Rotary Position Embedding to the query and key tensors, or only the queries if the keys are not provided.
+    # The NPU partial-RoPE kernel returns both q and k. Keep the query-only
+    # calls on the exact eager path to preserve the upstream return contract.
+    if veomni_apply_rotary_pos_emb.use_non_eager_impl and k is not None:
+        return veomni_apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=unsqueeze_dim)
 
-    Args:
-        q (`torch.Tensor`): The query tensor.
-        k (`torch.Tensor`): The key tensor if provided.
-        cos (`torch.Tensor`): The cosine part of the rotary embedding.
-        sin (`torch.Tensor`): The sine part of the rotary embedding.
-        unsqueeze_dim (`int`, *optional*, defaults to 1):
-            The 'unsqueeze_dim' argument specifies the dimension along which to unsqueeze cos[position_ids] and
-            sin[position_ids] so that they can be properly broadcasted to the dimensions of q and k. For example, note
-            that cos[position_ids] and sin[position_ids] have the shape [batch_size, seq_len, head_dim]. Then, if q and
-            k have the shape [batch_size, heads, seq_len, head_dim], then setting unsqueeze_dim=1 makes
-            cos[position_ids] and sin[position_ids] broadcastable to the shapes of q and k. Similarly, if q and k have
-            the shape [batch_size, seq_len, heads, head_dim], then set unsqueeze_dim=2.
-    Returns:
-        `tuple(torch.Tensor)` comprising of the query and key tensors rotated using the Rotary Position Embedding.
-    """
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
     rotary_dim = cos.shape[-1]
-
-    # Keep half or full tensor for later concatenation
     q_rope, q_nope = q[..., :rotary_dim], q[..., rotary_dim:]
-    # Apply rotary embeddings on the first half or full tensor
     q_rope = (q_rope * cos) + (rotate_half(q_rope) * sin)
-    # Concatenate back to full shape
     q_rotated = torch.cat([q_rope, q_nope], dim=-1)
 
-    if k is not None:
-        k_rope, k_nope = k[..., :rotary_dim], k[..., rotary_dim:]
-        k_rope = (k_rope * cos) + (rotate_half(k_rope) * sin)
-        k_rotated = torch.cat([k_rope, k_nope], dim=-1)
-        return q_rotated, k_rotated
-    else:
+    if k is None:
         return q_rotated
+
+    k_rope, k_nope = k[..., :rotary_dim], k[..., rotary_dim:]
+    k_rope = (k_rope * cos) + (rotate_half(k_rope) * sin)
+    k_rotated = torch.cat([k_rope, k_nope], dim=-1)
+    return q_rotated, k_rotated
 
 
 # ======================================================================
@@ -2031,18 +2043,24 @@ class Qwen4ExpVisionPatchMerger(nn.Module):
         return x
 
 
+# ======================================================================
+# [PATCHED FUNCTION] apply_rotary_pos_emb_vision
+# Reason: Use NPU fused rotary position embedding in the vision tower
+# Source: veomni.models.transformers.qwen4_exp.qwen4_exp_npu_patch_gen_config
+# ======================================================================
 def apply_rotary_pos_emb_vision(
     q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
+    if veomni_apply_rotary_pos_emb_vision.use_non_eager_impl:
+        return veomni_apply_rotary_pos_emb_vision(q, k, cos, sin)
+
     orig_q_dtype = q.dtype
     orig_k_dtype = k.dtype
     q, k = q.float(), k.float()
     cos, sin = cos.unsqueeze(-2).float(), sin.unsqueeze(-2).float()
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
-    q_embed = q_embed.to(orig_q_dtype)
-    k_embed = k_embed.to(orig_k_dtype)
-    return q_embed, k_embed
+    return q_embed.to(orig_q_dtype), k_embed.to(orig_k_dtype)
 
 
 class Qwen4ExpVisionAttention(nn.Module):

@@ -9,6 +9,8 @@ Supported in this first stage:
 - GPU and NPU VLM supervised fine-tuning with `ulysses_size=1` and `cp_size=1`.
 - Eager or SDPA QSA correctness paths.
 - Opt-in QSA Triton token-selection with packed-varlen segment isolation.
+- NPU fused zero-centered RMSNorm and partial/vision RoPE dispatch; grouped
+  RMSNorm stays eager to preserve group-local normalization.
 - VeOmni fused cross-entropy and fused MoE dispatch.
 - Concurrent PLE and MoE expert parallelism: PLE tables use the persistent
   two-dimensional `ple_fsdp × ple` layout while expert tensors use the

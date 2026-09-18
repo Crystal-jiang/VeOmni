@@ -191,6 +191,7 @@ jobs:
           uv run --frozen pytest -v -s -x tests/ops/test_moe_hw_gate.py
           uv run --frozen pytest -v -s -x tests/ops/test_npu_kernels.py
           uv run --frozen pytest -v -s -x tests/ops/test_qsa.py
+          uv run --frozen pytest -v -s -x tests/models/test_qwen4_exp_npu_ops.py
       - name: Run utils tests
         run: |
           uv run --frozen pytest -v -s -x tests/utils/test_count_flops.py
