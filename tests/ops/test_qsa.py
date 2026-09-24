@@ -6,8 +6,10 @@ import pytest
 import torch
 
 from veomni.ops.kernel_registry import KERNEL_REGISTRY
+from veomni.ops.kernels.qsa import triton as qsa_triton
 from veomni.ops.kernels.qsa.eager import qsa_indexer_forward_eager
 from veomni.ops.kernels.qsa.triton import qsa_indexer_forward_triton
+from veomni.utils.device import get_device_type
 
 
 class _RMSNorm:
@@ -154,3 +156,62 @@ def test_qsa_block_diagonal_mask_has_no_cross_segment_visibility() -> None:
     assert not mask[0, 0, :3, 3:].any()
     assert mask[0, 0, 2, 2]
     assert not mask[0, 0, 2, 3]
+
+
+@pytest.mark.parametrize("mask_dtype", [torch.bool, torch.bfloat16])
+@pytest.mark.parametrize("lengths", [(257,), (67, 129)])
+def test_qsa_triton_hardware_sparse_parity(monkeypatch, mask_dtype, lengths) -> None:
+    """Exercise real sparse kernels, tail blocks and packed segment isolation."""
+    device = get_device_type()
+    if device not in ("cuda", "npu") or not qsa_triton._TRITON_AVAILABLE:
+        pytest.skip("Requires CUDA/NPU with Triton installed")
+    torch.manual_seed(42)
+    dtype = torch.bfloat16
+    total_length = sum(lengths)
+    indexer = _QSAIndexer(256, 4, 128)
+    indexer.token_budget = 32
+    indexer.compress_ratio = 4
+    indexer.index_qk_proj.to(device=device, dtype=dtype)
+    indexer.q_layernorm.weight = indexer.q_layernorm.weight.to(device=device, dtype=dtype)
+    indexer.k_layernorm.weight = indexer.k_layernorm.weight.to(device=device, dtype=dtype)
+    hidden_states = torch.randn(1, total_length, 256).to(device=device, dtype=dtype)
+    angles = torch.randn(1, total_length, 64)
+    position_embeddings = tuple(x.to(device=device, dtype=dtype) for x in (angles.cos(), angles.sin()))
+    attention_mask = _block_diagonal_mask(lengths, mask_dtype).to(device)
+    cu_seq_lens = (
+        torch.tensor([0, lengths[0], total_length], device=device, dtype=torch.int32) if len(lengths) > 1 else None
+    )
+    expected = qsa_indexer_forward_eager(
+        indexer, hidden_states, position_embeddings, attention_mask, None, cu_seq_lens
+    )
+
+    def forbid_fallback(*args, **kwargs):
+        raise AssertionError("Hardware regression must execute the Triton path")
+
+    score_kernel = qsa_triton._qsa_score_kernel
+    launches = []
+
+    class RecordingScoreKernel:
+        def __getitem__(self, grid):
+            launch = score_kernel[grid]
+
+            def run(*args, **kwargs):
+                launches.append(grid)
+                return launch(*args, **kwargs)
+
+            return run
+
+    monkeypatch.setattr(qsa_triton, "qsa_reference_mask", forbid_fallback)
+    monkeypatch.setattr(qsa_triton, "_qsa_score_kernel", RecordingScoreKernel())
+    actual = qsa_indexer_forward_triton(
+        indexer,
+        hidden_states,
+        position_embeddings,
+        attention_mask,
+        None,
+        cu_seq_lens,
+        qsa_packed_seq_lens=lengths if cu_seq_lens is not None else None,
+    )
+    assert len(launches) >= len(lengths)
+    assert actual.dtype == expected.dtype
+    assert torch.equal(actual, expected)

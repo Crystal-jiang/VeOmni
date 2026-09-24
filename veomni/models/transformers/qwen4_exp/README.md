@@ -43,8 +43,17 @@ Known limitations:
 - Ulysses/context sequence parallelism is rejected because PLE n-gram context
   and QSA global token indices need dedicated distributed semantics.
 - The QSA Triton kernel is opt-in via `qsa_indexer_implementation: triton`;
-  eager remains the default because real GPU/NPU performance validation is
-  still pending.
+  eager remains the default. Ascend A3 validation covered 22 BF16/FP16
+  operator/indexer cases with identical selected masks and a 20-step,
+  16-device random-init smoke model (2 text layers, 16 experts). Warm-cache
+  mean step time over steps 6-20 decreased from 33.019 s to 5.688 s; maximum
+  loss absolute difference was 0.0004034042. These are reduced-model results,
+  not full-checkpoint or GPU validation. The first cold run hit a Triton
+  Ascend compiler SIGSEGV; unchanged retry and warm-cache runs passed.
+  Cold-compilation stability remains unresolved. Tests in `tests/ops/test_qsa.py`
+  include hardware sparse/packed parity cases and skip them without Triton
+  and a supported accelerator. Packed routing assumes standard causal segments,
+  not arbitrary custom masks. Attention itself still uses a dense mask.
 - Distributed PLE training expects pretrained or DCP weights. Initializing from
   scratch after PLE parameters become DTensors is not supported by the upstream
   Hugging Face initializer.
